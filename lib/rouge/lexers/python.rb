@@ -68,10 +68,30 @@ module Rouge
       end
 
       identifier =        /[[:alpha:]_][[:alnum:]_]*/
+      lower_identifier =  /[[:lower:]_][[:alnum:]_]*/
+      upper_identifier =  /[[:upper:]_][[:alnum:]_]*/
       dotted_identifier = /[[:alpha:]_.][[:alnum:]_.]*/
 
       def current_string
         @string_register ||= StringRegister.new
+      end
+
+      def id(match, type)
+        if self.class.keywords.include? match
+          token Keyword
+        elsif not in_state?(:dot) and self.class.exceptions.include? match
+          token Name::Builtin
+        elsif not in_state?(:dot) and self.class.builtins.include? match
+          token Name::Builtin
+        elsif not in_state?(:dot) and self.class.builtins_pseudo.include? match
+          token Name::Builtin::Pseudo
+        else
+          token type
+        end
+
+        if in_state?(:dot)
+          pop!
+        end
       end
 
       state :root do
@@ -84,9 +104,14 @@ module Rouge
 
         rule %r/[^\S\n]+/, Text
         rule %r(#(.*)?\n?), Comment::Single
-        rule %r/[\[\]{}:(),;.]/, Punctuation
+        rule %r/[\[\]{}:(),;]/, Punctuation
         rule %r/\\\n/, Text
         rule %r/\\/, Text
+
+        rule /\./ do
+          token Punctuation
+          push :dot if not (in_state?(:generic_string) or in_state?(:dot))
+        end
 
         rule %r/@#{dotted_identifier}/i, Name::Decorator
 
@@ -116,9 +141,6 @@ module Rouge
           push :classname
         end
 
-        rule %r/([a-z_]\w*)[ \t]*(?=(\(.*\)))/m, Name::Function
-        rule %r/([A-Z_]\w*)[ \t]*(?=(\(.*\)))/m, Name::Class
-
         # TODO: not in python 3
         rule %r/`.*?`/, Str::Backtick
         rule %r/([rfbu]{0,2})('''|"""|['"])/i do |m|
@@ -127,22 +149,17 @@ module Rouge
           push :generic_string
         end
 
-        # using negative lookbehind so we don't match property names
-        rule %r/(?<!\.)#{identifier}/ do |m|
-          if self.class.keywords.include? m[0]
-            token Keyword
-          elsif self.class.exceptions.include? m[0]
-            token Name::Builtin
-          elsif self.class.builtins.include? m[0]
-            token Name::Builtin
-          elsif self.class.builtins_pseudo.include? m[0]
-            token Name::Builtin::Pseudo
-          else
-            token Name
-          end
+        # Handle identifiers that look like a call
+        rule %r/#{lower_identifier}(?=[[:blank:]]*\()/m do |m|
+          id m[0], Name::Function
+        end
+        rule %r/#{upper_identifier}(?=[[:blank:]]*\()/m do |m|
+          id m[0], Name::Class
         end
 
-        rule identifier, Name
+        rule identifier do |m|
+          id m[0], Name
+        end
 
         digits = /[0-9](_?[0-9])*/
         decimal = /((#{digits})?\.#{digits}|#{digits}\.)/
@@ -156,6 +173,10 @@ module Rouge
         rule %r/0x(_?[a-f0-9])+/i, Num::Hex
         rule %r/\d+L/, Num::Integer::Long
         rule %r/([1-9](_?[0-9])*|0(_?0)*)/, Num::Integer
+      end
+
+      state :dot do
+        mixin :root
       end
 
       state :funcname do
